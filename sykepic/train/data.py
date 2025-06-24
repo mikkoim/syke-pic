@@ -43,6 +43,7 @@ class ModelData:
         self.distribution = {}
 
         for class_dir in self.dataset.iterdir():
+            print(f"Processing class '{class_dir.name}'...")
             paths = sorted(
                 list_files(
                     class_dir,
@@ -263,16 +264,19 @@ def list_files(root_dir, extension, min_N=None, max_N=None, exclude=[], random_s
         dirpath = Path(dirpath)
         if dirpath.name in exclude:
             continue
-        if min_N and len(filenames) < min_N:
+        
+        filtered = [f for f in filenames if Path(f).suffix in extension]
+
+        if min_N and len(filtered) < min_N:
             continue
-        if max_N and len(filenames) > max_N:
+
+        if max_N and len(filtered) > max_N:
             random.seed(random_seed)
             random.shuffle(filenames)
             filenames = filenames[:max_N]
-        for filename in filenames:
-            filepath = dirpath / filename
-            if filepath.suffix in extension:
-                yield filepath.resolve()
+
+        for filename in filtered:
+            yield Path(dirpath / filename)
 
 
 def auto_id(name, directory):
