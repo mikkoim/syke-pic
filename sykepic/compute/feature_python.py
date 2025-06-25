@@ -4,12 +4,14 @@ import os
 from multiprocessing import get_context
 from pathlib import Path
 
-from typing import List, Tuple, Optional, Literal
+from typing import List, Tuple, Optional, Literal, Union
 from dataclasses import dataclass
+from tqdm import tqdm
 
 import numpy as np
 from ifcb_features import compute_features
 from sykepic.utils import files, ifcb, logger
+from PIL import Image
 
 VERSION = "py-v4"
 FILE_SUFFIX = ".feat"
@@ -46,7 +48,16 @@ def call(args):
             force=args.force,
         )
     else: # args.image_dir
-        pass
+        image_dir = Path(args.image_dir)
+        img_files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.png"))
+        sample_paths = [file for file in img_files if file.is_file()]
+        process_sample_list(
+            sample_paths=sample_paths,
+            sample_type="img",
+            out_dir=args.out,
+            parallel=args.parallel,
+            force=args.force,
+        )
 
 def filter_sample_paths(sample_paths: List[Path]) -> List[Path]:
     """Filter sample paths to exclude those with .roi files larger than 1GB.
@@ -80,11 +91,20 @@ def process_sample_list(
         out_dir (str): Output directory where the CSV files will be saved.
         parallel (bool): Whether to process samples in parallel.
         force (bool): Whether to overwrite existing CSV files.
-    Returns:
-        set: A set of sample names that were processed.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if sample_type == 'img':
+        csv_path = make_csv_path(
+            sample_type=sample_type,
+            sample_path=sample_paths[0].parent.name,
+            out_dir=out_dir,
+            force=force
+        )
+        if csv_path is None:
+            return
+
     if parallel:
         available_cores = os.cpu_count()
         log.debug(f"Extracting features in parallel with {available_cores} cores")
@@ -95,19 +115,56 @@ def process_sample_list(
     else:
         log.debug("Extracting features synchronously")
         samples_processed = []
-        for path in sorted(sample_paths):
+        for path in tqdm(sorted(sample_paths)):
             samples_processed.append(process_sample(path, sample_type, out_dir, force))
 
+    # Aggregate results for image samples
     if sample_type == "img":
-        # Placeholder for image directory sample aggregation
-        pass
-    return set(filter(None, samples_processed))
+        image_features_to_csv(
+            roi_features=samples_processed,
+            csv_path=csv_path
+        )
+    
+def make_csv_path(sample_type: Literal['ifcb', 'img'], sample_path: Path, out_dir: str, force: bool = False) -> Union[Path, None]:
+    """
+    Check if a CSV file for the given sample already exists.
+    If it exists and force is False, returs None.
+    If it exists and force is True, returns the path to the CSV file, overwriting it.
+    If it does not exist, returns the path to the CSV file.
+    """
+    if sample_type == 'ifcb':
+        csv_path: Path = files.sample_csv_path(sample_path, out_dir, suffix=FILE_SUFFIX)
+    else:
+        csv_path = out_dir / f"{sample_path}{FILE_SUFFIX}.csv"
 
+    pid = os.getpid()
+    if csv_path.is_file():
+        if force:
+            print(
+                f"feat [{pid}] - WARNING - {str(csv_path)} already exists, overwriting"
+            )
+            return csv_path
+        else:
+            print(f"feat [{pid}] - WARNING - {str(csv_path)} already exists, skipping")
+            return None
+    return csv_path
+
+@dataclass
+class ROIFeatures:
+    roi_id: str
+    sample_type: str
+    biovol_px: int
+    area: float
+    major_axis_length: float
+    minor_axis_length: float
+    biovol_um3: Optional[float] = None
+    biomass_ugl: Optional[float]= None
+    volume_ml: Optional[float] = None
 
 def process_sample(sample_path: Path,
                    sample_type: Literal["ifcb", "img"],
                    out_dir: str,
-                   force: bool=False):
+                   force: bool=False) -> Union[List[ROIFeatures], None]:
     """
     Process a single sample to extract features and save them to a CSV file.
     Handles the creation of the output directory and checks for existing files.
@@ -123,45 +180,37 @@ def process_sample(sample_path: Path,
         out_dir (Path): Output directory where the CSV file will be saved.
         force (bool): Whether to overwrite existing CSV files.
     Returns:
-        str: The name of the processed sample, or None if it was skipped.
+        Union[List[ROIFeatures], None]: 
+            If sample_type is 'ifcb', returns None after saving features to CSV.
+            If sample_type is 'ifcb' and the CSV file already exists, returns None without processing.
+            If sample_type is 'img', returns a list of ROIFeatures for the image.
     """
     pid = os.getpid()
-
-    csv_path: Path = files.sample_csv_path(sample_path, out_dir, suffix=FILE_SUFFIX)
-    if csv_path.is_file():
-        if force:
-            print(
-                f"feat [{pid}] - WARNING - {csv_path.name} already exists, overwriting"
-            )
-        else:
-            print(f"feat [{pid}] - WARNING - {csv_path.name} already exists, skipping")
-            return sample_path.name
-
     print(f"feat [{pid}] - INFO - Extracting features for {sample_path.name}")
 
     if sample_type == 'ifcb':
+        csv_path = make_csv_path(sample_type, sample_path, out_dir, force)
+        if csv_path is None:
+            return None
         roi_features = sample_ifcb_features(sample_path)
         ifcb_features_to_csv(roi_features, csv_path)
+        return None
+
     elif sample_type == 'img':
-        pass
+        roi_features = sample_image_features(sample_path)
+        return roi_features
     else:
         raise ValueError(f"Unknown sample type: {sample_type}")
 
-    return sample_path.name
-
-@dataclass
-class ROIFeatures:
-    roi_id: str
-    sample_type: str
-    biovol_px: int
-    area: float
-    major_axis_length: float
-    minor_axis_length: float
-    biovol_um3: Optional[float] = None
-    biomass_ugl: Optional[float]= None
-    volume_ml: Optional[float] = None
 
 def sample_ifcb_features(sample_path: Path) -> List[ROIFeatures]:
+    """
+    Extract features from an IFCB sample file.
+    Args:
+        sample_path (Path): Path to the IFCB sample file (.adc).
+    Returns:
+        List[ROIFeatures]: A list of ROIFeatures dataclasses containing the extracted features.
+    """
     root = Path(sample_path)
     adc = root.with_suffix(".adc")
     hdr = root.with_suffix(".hdr")
@@ -180,6 +229,19 @@ def sample_ifcb_features(sample_path: Path) -> List[ROIFeatures]:
                                                    sample_type='ifcb',
                                                    roi_array=roi_array,
                                                    volume_ml=volume_ml))
+    return roi_features
+
+def sample_image_features(sample_path: Path) -> List[ROIFeatures]:
+    """
+    calculate features for an image sample.
+    """
+    roi_array = np.array(Image.open(sample_path).convert("L"))  # Convert to grayscale
+    roi_id = sample_path.name
+    roi_features = calculate_roi_features(
+        roi_id=roi_id,
+        sample_type='img',
+        roi_array=roi_array
+    )
     return roi_features
 
 def calculate_roi_features(roi_id: str,
@@ -253,6 +315,8 @@ def biovolume_to_biomass(biovol_um3, volume_ml):
 
 
 def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: str):
+    if csv_path is None:
+        raise ValueError("CSV path cannot be None")
     sample_types = set([f.sample_type for f in roi_features])
     if sample_types != {'ifcb'}:
         raise ValueError(f"All ROI features must be of type 'ifcb'. Now they are {sample_types}")
@@ -281,6 +345,41 @@ def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: str):
     csv_content += f"# volume_ml={volume_ml}\n"
     csv_content += (
         "roi,biovolume_px,biovolume_um3,biomass_ugl,"
+        "area,major_axis_length,minor_axis_length\n"
+    )
+    for roi_feat in selected_features:
+        csv_content += ",".join(map(str, roi_feat)) + "\n"
+    with open(csv_path, "w") as fh:
+        fh.write(csv_content)
+
+def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
+    """
+    Save image ROI features to a CSV file.
+    Args:
+        roi_features (List[ROIFeatures]): List of ROIFeatures dataclasses containing the extracted features.
+        csv_path (Path): Path to the CSV file where the features will be saved.
+    """
+    if csv_path is None:
+        raise ValueError("CSV path cannot be None")
+    sample_types = set([f.sample_type for f in roi_features])
+    if sample_types != {'img'}:
+        raise ValueError(f"All ROI features must be of type 'img'. Now they are {sample_types}")
+
+    selected_features = [
+        (
+            roi_feat.roi_id,
+            roi_feat.biovol_px,
+            roi_feat.area,
+            roi_feat.major_axis_length,
+            roi_feat.minor_axis_length
+        )
+        for roi_feat in roi_features
+    ]
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    # csv_content = f"# {datetime.now().astimezone().isoformat()}\n"
+    csv_content = f"# version={VERSION}\n"
+    csv_content += (
+        "roi,biovolume_px,"
         "area,major_axis_length,minor_axis_length\n"
     )
     for roi_feat in selected_features:
