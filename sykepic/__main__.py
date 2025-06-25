@@ -112,6 +112,7 @@ def main():
         metavar="SAMPLE PATH",
         help="One or more sample paths (raw file without suffix)",
     )
+    feat_raw.add_argument("--image-dir", metavar="DIR", help="Root directory of images")
     feat_parser.add_argument(
         "-o", "--out", metavar="DIR", required=True, help="Root output directory"
     )
