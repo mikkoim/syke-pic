@@ -49,6 +49,8 @@ def call(args):
         )
     else: # args.image_dir
         image_dir = Path(args.image_dir)
+        if not image_dir.exists():
+            raise ValueError(f"The directory {args.image_dir} does not exist.")
         img_files = list(image_dir.glob("*.jpg")) + list(image_dir.glob("*.png"))
         sample_paths = [file for file in img_files if file.is_file()]
         process_sample_list(
