@@ -110,11 +110,11 @@ def process_sample_list(
     if parallel:
         slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
         if slurm_cpus:
-            available_cores = int(slurm_cpus)
-            log.debug(f"Extracting features in parallel with {available_cores} cores (SLURM_CPUS_PER_TASK)")
+            available_cores = int(slurm_cpus) -1
+            print(f"Extracting features in parallel with {available_cores} cores (SLURM_CPUS_PER_TASK)")
         else:
-            available_cores = os.cpu_count()
-            log.debug(f"Extracting features in parallel with {available_cores} cores (os.cpu_count())")
+            available_cores = os.cpu_count() -1
+            print(f"Extracting features in parallel with {available_cores} cores (os.cpu_count())")
         
         samples_processed = Parallel(n_jobs=available_cores)(
             delayed(process_sample)(path, sample_type, out_dir, force) for path in tqdm(sample_paths)
@@ -323,6 +323,8 @@ def biovolume_to_biomass(biovol_um3, volume_ml):
 
 
 def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: str):
+    if len(roi_features) == 0:
+        return None
     if csv_path is None:
         raise ValueError("CSV path cannot be None")
     sample_types = set([f.sample_type for f in roi_features])
