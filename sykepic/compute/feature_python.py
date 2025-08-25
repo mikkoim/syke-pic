@@ -1,7 +1,7 @@
 """Extract features for raw IFCB data"""
 
 import os
-from multiprocessing import get_context
+from joblib import Parallel, delayed
 from pathlib import Path
 
 from typing import List, Tuple, Optional, Literal, Union
@@ -108,12 +108,18 @@ def process_sample_list(
             return
 
     if parallel:
-        available_cores = os.cpu_count()
-        log.debug(f"Extracting features in parallel with {available_cores} cores")
-        with get_context("spawn").Pool(available_cores) as pool:
-            samples_processed = pool.starmap(
-                process_sample, [(path, sample_type, out_dir, force) for path in sample_paths]
-            )
+        slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
+        if slurm_cpus:
+            available_cores = int(slurm_cpus)
+            log.debug(f"Extracting features in parallel with {available_cores} cores (SLURM_CPUS_PER_TASK)")
+        else:
+            available_cores = os.cpu_count()
+            log.debug(f"Extracting features in parallel with {available_cores} cores (os.cpu_count())")
+        
+        samples_processed = Parallel(n_jobs=available_cores)(
+            delayed(process_sample)(path, sample_type, out_dir, force) for path in tqdm(sample_paths)
+        )
+
     else:
         log.debug("Extracting features synchronously")
         samples_processed = []
