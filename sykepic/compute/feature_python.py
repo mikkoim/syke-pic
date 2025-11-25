@@ -17,6 +17,18 @@ VERSION = "py-v4"
 FILE_SUFFIX = ".feat"
 log = logger.get_logger("feat")
 
+MICRON_FACTORS = {
+    'ifcb': 2.8,
+    'cytosense': 3.5
+}
+
+def validate_args(args):
+    """Validates command line arguments for feature extraction."""
+    if args.device and not args.image_dir:
+        raise ValueError("--device can only be used with --image-dir")
+
+    if args.image_dir and not args.device:
+        raise ValueError("--device is required when --image-dir is used")
 
 def call(args):
     """
@@ -27,12 +39,16 @@ def call(args):
     Returns:
         None
     """
+
+    validate_args(args)
+
     if args.raw:
         sample_paths: List[Path] = files.list_sample_paths(args.raw)
         filtered_sample_paths = filter_sample_paths(sample_paths)
         process_sample_list(
             sample_paths=filtered_sample_paths,
             sample_type="ifcb",
+            device="ifcb",
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
@@ -43,6 +59,7 @@ def call(args):
         process_sample_list(
             sample_paths=filtered_sample_paths,
             sample_type="ifcb",
+            device="ifcb",
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
@@ -56,6 +73,7 @@ def call(args):
         process_sample_list(
             sample_paths=sample_paths,
             sample_type="img",
+            device=args.device,
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
@@ -79,6 +97,7 @@ def filter_sample_paths(sample_paths: List[Path]) -> List[Path]:
 def process_sample_list(
     sample_paths: List[Path],
     sample_type: Literal["ifcb", "img"],
+    device: Literal['ifcb', 'cytosense'],
     out_dir: str,
     parallel: bool = False,
     force: bool = False
@@ -117,14 +136,14 @@ def process_sample_list(
             print(f"Extracting features in parallel with {available_cores} cores (os.cpu_count())")
         
         samples_processed = Parallel(n_jobs=available_cores)(
-            delayed(process_sample)(path, sample_type, out_dir, force) for path in tqdm(sample_paths)
+            delayed(process_sample)(path, sample_type, device, out_dir, force) for path in tqdm(sample_paths)
         )
 
     else:
         log.debug("Extracting features synchronously")
         samples_processed = []
         for path in tqdm(sorted(sample_paths)):
-            samples_processed.append(process_sample(path, sample_type, out_dir, force))
+            samples_processed.append(process_sample(path, sample_type, device, out_dir, force))
 
     # Aggregate results for image samples
     if sample_type == "img":
@@ -171,6 +190,7 @@ class ROIFeatures:
 
 def process_sample(sample_path: Path,
                    sample_type: Literal["ifcb", "img"],
+                   device: Literal['ifcb', 'cytosense'],
                    out_dir: str,
                    force: bool=False) -> Union[List[ROIFeatures], None]:
     """
@@ -205,7 +225,7 @@ def process_sample(sample_path: Path,
         return None
 
     elif sample_type == 'img':
-        roi_features = sample_image_features(sample_path)
+        roi_features = sample_image_features(sample_path, device)
         return roi_features
     else:
         raise ValueError(f"Unknown sample type: {sample_type}")
@@ -239,30 +259,37 @@ def sample_ifcb_features(sample_path: Path) -> List[ROIFeatures]:
                                                    volume_ml=volume_ml))
     return roi_features
 
-def sample_image_features(sample_path: Path) -> List[ROIFeatures]:
+def sample_image_features(sample_path: Path,
+                          device: Literal['ifcb', 'cytosense']) -> List[ROIFeatures]:
     """
     calculate features for an image sample.
     """
     roi_array = np.array(Image.open(sample_path).convert("L"))  # Convert to grayscale
     roi_id = sample_path.name
+
+    micron_factor = MICRON_FACTORS[device]
+
     roi_features = calculate_roi_features(
         roi_id=roi_id,
         sample_type='img',
-        roi_array=roi_array
+        roi_array=roi_array,
+        micron_factor=micron_factor
     )
     return roi_features
 
 def calculate_roi_features(roi_id: str,
                            sample_type: Literal['ifcb', 'img'],
                            roi_array: np.array,
-                           volume_ml: Optional[float] = None) -> ROIFeatures:
+                           volume_ml: Optional[float] = None,
+                           micron_factor: Optional[float] = 2.8) -> ROIFeatures:
     """
     Calculate features for a single ROI array.
     Args:
         roi_id (str): Identifier for the ROI.
         sample_type (Literal['ifcb', 'img']): Type of sample being processed. Is saved in the features.
         roi_array (np.array): Numpy array representing the ROI.
-        volume_ml (Optional[float]): Volume of the sample in milliliters. If None, some features will be None.
+        volume_ml (Optional[float]): Volume of the sample in milliliters. If None, biomass_ugl will be None.
+        micron_factor (Optional[float]): Micron factor for converting pixels to micrometers. Default is 2.8.
     Returns:
         ROIFeatures: A dataclass containing the calculated features for the ROI.
     """
@@ -275,10 +302,10 @@ def calculate_roi_features(roi_id: str,
     minor_axis_length = all_roi_features["MinorAxisLength"]
 
     if volume_ml is not None:
-        biovol_um3 = pixels_to_um3(biovol_px)
+        biovol_um3 = pixels_to_um3(biovol_px, micron_factor=micron_factor)
         biomass_ugl = biovolume_to_biomass(biovol_um3, volume_ml)
     else:
-        biovol_um3 = pixels_to_um3(biovol_px)
+        biovol_um3 = pixels_to_um3(biovol_px, micron_factor=micron_factor)
         biomass_ugl = None
 
     return ROIFeatures(
@@ -313,6 +340,7 @@ def sample_volume(hdr_file):
 def pixels_to_um3(pixels, micron_factor=2.8):
     return pixels / (micron_factor**3)
     # The micron factor should be 2.8 for python features v-4, but should still be tested for instruments
+    # When calculating features for image folders, micron factor is set based on device type
 
 
 def biovolume_to_biomass(biovol_um3, volume_ml):
