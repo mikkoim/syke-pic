@@ -3,8 +3,9 @@
 import os
 from joblib import Parallel, delayed
 from pathlib import Path
+import csv
 
-from typing import List, Tuple, Optional, Literal, Union
+from typing import List, Tuple, Optional, Literal, Union, Dict, Any
 from dataclasses import dataclass
 from tqdm import tqdm
 
@@ -19,7 +20,7 @@ log = logger.get_logger("feat")
 
 MICRON_FACTORS = {
     'ifcb': 2.8,
-    'cytosense': 3.5
+    'cytosense': 3.6
 }
 
 def validate_args(args):
@@ -186,7 +187,8 @@ class ROIFeatures:
     minor_axis_length: float
     biovol_um3: Optional[float] = None
     biomass_ugl: Optional[float]= None
-    volume_ml: Optional[float] = None
+    volume_ml: Optional[float] = None,
+    extended_features: Optional[Dict[str, Any]] = None
 
 def process_sample(sample_path: Path,
                    sample_type: Literal["ifcb", "img"],
@@ -296,6 +298,7 @@ def calculate_roi_features(roi_id: str,
     _, all_roi_features = compute_features(roi_array)
     all_roi_features = dict(all_roi_features)
 
+    breakpoint()
     biovol_px = all_roi_features["Biovolume"]
     area = all_roi_features["Area"]
     major_axis_length = all_roi_features["MajorAxisLength"]
@@ -349,46 +352,83 @@ def biovolume_to_biomass(biovol_um3, volume_ml):
     except ZeroDivisionError:
         return 0
 
+COMMON_FIELDS = {
+    "roi_id": "roi",
+    "biovol_px": "biovolume_px",
+    "biovol_um3": "biovolume_um3",
+    "area": "area",
+    "major_axis_length": "major_axis_length",
+    "minor_axis_length": "minor_axis_length",
+}
 
-def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: str):
-    if len(roi_features) == 0:
+IFCB_FIELD_MAPPING = {
+    **COMMON_FIELDS,
+    "biomass_ugl": "biomass_ugl",
+}
+
+IMAGE_FIELD_MAPPING = {
+    **COMMON_FIELDS,
+}
+
+def write_features_to_csv(
+    features: List[ROIFeatures],
+    csv_path: Path,
+    field_mapping: Dict[str, str],
+    metadata: Dict[str, Any]
+):
+    """Write ROI features to a CSV file with metadata as comments."""
+    path_obj = Path(csv_path)
+    path_obj.parent.mkdir(parents=True, exist_ok=True)
+    csv_headers = list(field_mapping.values())
+
+    with open(path_obj, "w", newline='') as fh:
+        # Write metadata as comments
+        for key, value in metadata.items():
+            fh.write(f"# {key}={value}\n")
+        
+        writer = csv.DictWriter(fh, fieldnames=csv_headers)
+        writer.writeheader()
+
+        for roi in features:
+            row = {
+                csv_header: getattr(roi, attr_name)
+                for attr_name, csv_header in field_mapping.items()
+            }
+            writer.writerow(row)
+
+def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
+    """
+    Save IFCB ROI features to a CSV file.
+    Args:
+        roi_features (List[ROIFeatures]): List of ROIFeatures dataclasses containing the extracted features.
+        csv_path (Path): Path to the CSV file where the features will be saved.
+    """
+    if not roi_features:
         return None
     if csv_path is None:
-        raise ValueError("CSV path cannot be None")
+        raise ValueError("CSV path cannot be None") 
+    
     sample_types = set([f.sample_type for f in roi_features])
     if sample_types != {'ifcb'}:
-        raise ValueError(f"All ROI features must be of type 'ifcb'. Now they are {sample_types}")
-
+        raise ValueError(f"All ROI features must be of type 'ifcb'. Found: {sample_types}")
+    
     volume_mls = set([f.volume_ml for f in roi_features])
     if len(volume_mls) != 1:
         raise ValueError(
-            f"All ROI features must have the same volume_ml. Now they are {volume_mls}"
+            f"All ROI features must have the same volume_ml. Found: {volume_mls}"
         )
     volume_ml = roi_features[0].volume_ml
-    selected_features = [
-        (
-            roi_feat.roi_id,
-            roi_feat.biovol_px,
-            roi_feat.biovol_um3,
-            roi_feat.biomass_ugl,
-            roi_feat.area,
-            roi_feat.major_axis_length,
-            roi_feat.minor_axis_length
-        )
-        for roi_feat in roi_features
-    ]
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    # csv_content = f"# {datetime.now().astimezone().isoformat()}\n"
-    csv_content = f"# version={VERSION}\n"
-    csv_content += f"# volume_ml={volume_ml}\n"
-    csv_content += (
-        "roi,biovolume_px,biovolume_um3,biomass_ugl,"
-        "area,major_axis_length,minor_axis_length\n"
+    metadata = {
+        "version": VERSION,
+        "volume_ml": volume_ml
+    }
+
+    write_features_to_csv(
+        features=roi_features,
+        csv_path=csv_path,
+        field_mapping=IFCB_FIELD_MAPPING,
+        metadata=metadata
     )
-    for roi_feat in selected_features:
-        csv_content += ",".join(map(str, roi_feat)) + "\n"
-    with open(csv_path, "w") as fh:
-        fh.write(csv_content)
 
 def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
     """
@@ -397,32 +437,23 @@ def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
         roi_features (List[ROIFeatures]): List of ROIFeatures dataclasses containing the extracted features.
         csv_path (Path): Path to the CSV file where the features will be saved.
     """
+    if not roi_features:
+        return None
     if csv_path is None:
-        raise ValueError("CSV path cannot be None")
+        raise ValueError("CSV path cannot be None") 
+    
     sample_types = set([f.sample_type for f in roi_features])
     if sample_types != {'img'}:
-        raise ValueError(f"All ROI features must be of type 'img'. Now they are {sample_types}")
+        raise ValueError(f"All ROI features must be of type 'img'. Found: {sample_types}")
+    
+    metadata = {
+        "version": VERSION,
+        "volume_ml": "None"
+    }
 
-    selected_features = [
-        (
-            roi_feat.roi_id,
-            roi_feat.biovol_px,
-            roi_feat.biovol_um3,
-            roi_feat.area,
-            roi_feat.major_axis_length,
-            roi_feat.minor_axis_length
-        )
-        for roi_feat in roi_features
-    ]
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    # csv_content = f"# {datetime.now().astimezone().isoformat()}\n"
-    csv_content = f"# version={VERSION}\n"
-    csv_content += (
-        "roi,biovolume_px,biovolume_um3,"
-        "area,major_axis_length,minor_axis_length\n"
+    write_features_to_csv(
+        features=roi_features,
+        csv_path=csv_path,
+        field_mapping=IMAGE_FIELD_MAPPING,
+        metadata=metadata
     )
-    for roi_feat in selected_features:
-        csv_content += ",".join(map(str, roi_feat)) + "\n"
-    with open(csv_path, "w") as fh:
-        fh.write(csv_content)
-
