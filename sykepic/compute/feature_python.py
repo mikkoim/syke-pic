@@ -278,7 +278,7 @@ def calculate_roi_features(roi_id: str,
         biovol_um3 = pixels_to_um3(biovol_px)
         biomass_ugl = biovolume_to_biomass(biovol_um3, volume_ml)
     else:
-        biovol_um3 = None
+        biovol_um3 = pixels_to_um3(biovol_px)
         biomass_ugl = None
 
     return ROIFeatures(
@@ -379,6 +379,7 @@ def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
         (
             roi_feat.roi_id,
             roi_feat.biovol_px,
+            roi_feat.biovol_um3,
             roi_feat.area,
             roi_feat.major_axis_length,
             roi_feat.minor_axis_length
@@ -389,7 +390,7 @@ def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
     # csv_content = f"# {datetime.now().astimezone().isoformat()}\n"
     csv_content = f"# version={VERSION}\n"
     csv_content += (
-        "roi,biovolume_px,"
+        "roi,biovolume_px,biovolume_um3,"
         "area,major_axis_length,minor_axis_length\n"
     )
     for roi_feat in selected_features:
