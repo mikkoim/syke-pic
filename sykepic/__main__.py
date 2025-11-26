@@ -141,6 +141,11 @@ def main():
         choices=["ifcb", "cytosense"],
         help="The imaging device ('ifcb' or 'cytosense') where the images originated from. Used to set correct micron factor.",
     )
+    feat_parser.add_argument(
+        "--save-all-features",
+        action="store_true",
+        help="Save all computed features from the ifcb-features library, not just the standard set.",
+    )
 
     # Parser for `sykepic class`
     class_parser = subparsers.add_parser(

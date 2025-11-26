@@ -23,6 +23,58 @@ MICRON_FACTORS = {
     'cytosense': 3.6
 }
 
+# Features from here: https://aslopubs.onlinelibrary.wiley.com/doi/full/10.1002/lno.12171
+EXTENDED_FEATURES = [
+    "summedArea",
+
+    "ConvexArea",
+    "summedConvexArea",
+
+    "Perimeter",
+    "summedPerimeter",
+
+    "ConvexPerimeter",
+    "summedConvexPerimeter",
+
+    "shapehist_mean_normEqD",
+    "shapehist_median_normEqD",
+    # "shapehist_mode_normalEqD",  # Not implemented in ifcb-features
+    "shapehist_skewness_normEqD",
+    "shapehist_kurtosis_normEqD",
+
+    "Area_over_PerimeterSquared",
+    "Area_over_Perimeter",
+
+    "summedConvexPerimeter_over_Perimeter",
+    "EquivDiameter",
+
+    "RotatedBoundingBox_xwidth",
+    "summedMajorAxisLength",
+    "RotatedBoundingBox_ywidth",
+    "summedMinorAxisLength",
+
+    "Extent",
+    "Solidity",
+    "Eccentricity",
+    # "Circularity",  # Not implemented in ifcb-features
+    # "Elongation",  # Not implemented in ifcb-features
+    # "PerimeterComplexity_MajorAxis",  # Not implemented in ifcb-features
+    "Orientation",
+    "H180",
+    "H90",
+    "Hflip",
+    "H90_over_Hflip",
+    "H90_over_H180",
+    "Hflip_over_H180",
+    "summedBiovolume",
+    "texture_average_gray_level",
+    "texture_average_contrast",
+    "texture_smoothness",
+    "texture_third_moment",
+    "texture_uniformity",
+    "texture_entropy"
+]
+
 def validate_args(args):
     """Validates command line arguments for feature extraction."""
     if args.device and not args.image_dir:
@@ -53,6 +105,7 @@ def call(args):
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
+            save_all_features=args.save_all_features,
         )
     elif args.samples:
         sample_paths: List[Path] = [Path(path) for path in args.samples]
@@ -64,6 +117,7 @@ def call(args):
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
+            save_all_features=args.save_all_features,
         )
     else: # args.image_dir
         image_dir = Path(args.image_dir)
@@ -78,6 +132,7 @@ def call(args):
             out_dir=args.out,
             parallel=args.parallel,
             force=args.force,
+            save_all_features=args.save_all_features,
         )
 
 def filter_sample_paths(sample_paths: List[Path]) -> List[Path]:
@@ -101,7 +156,8 @@ def process_sample_list(
     device: Literal['ifcb', 'cytosense'],
     out_dir: str,
     parallel: bool = False,
-    force: bool = False
+    force: bool = False,
+    save_all_features: bool = False,
 ):
     """
     Extract features from a list of sample paths and save them to CSV files.
@@ -137,14 +193,14 @@ def process_sample_list(
             print(f"Extracting features in parallel with {available_cores} cores (os.cpu_count())")
         
         samples_processed = Parallel(n_jobs=available_cores)(
-            delayed(process_sample)(path, sample_type, device, out_dir, force) for path in tqdm(sample_paths)
+            delayed(process_sample)(path, sample_type, device, out_dir, save_all_features, force) for path in tqdm(sample_paths)
         )
 
     else:
         log.debug("Extracting features synchronously")
         samples_processed = []
         for path in tqdm(sorted(sample_paths)):
-            samples_processed.append(process_sample(path, sample_type, device, out_dir, force))
+            samples_processed.append(process_sample(path, sample_type, device, out_dir, save_all_features, force))
 
     # Aggregate results for image samples
     if sample_type == "img":
@@ -194,6 +250,7 @@ def process_sample(sample_path: Path,
                    sample_type: Literal["ifcb", "img"],
                    device: Literal['ifcb', 'cytosense'],
                    out_dir: str,
+                   save_all_features: bool = False,
                    force: bool=False) -> Union[List[ROIFeatures], None]:
     """
     Process a single sample to extract features and save them to a CSV file.
@@ -222,22 +279,24 @@ def process_sample(sample_path: Path,
         csv_path = make_csv_path(sample_type, sample_path, out_dir, force)
         if csv_path is None:
             return None
-        roi_features = sample_ifcb_features(sample_path)
+        roi_features = sample_ifcb_features(sample_path, save_all_features=save_all_features)
         ifcb_features_to_csv(roi_features, csv_path)
         return None
 
     elif sample_type == 'img':
-        roi_features = sample_image_features(sample_path, device)
+        roi_features = sample_image_features(sample_path, device, save_all_features=save_all_features)
         return roi_features
     else:
         raise ValueError(f"Unknown sample type: {sample_type}")
 
 
-def sample_ifcb_features(sample_path: Path) -> List[ROIFeatures]:
+def sample_ifcb_features(sample_path: Path,
+                         save_all_features: bool = False) -> List[ROIFeatures]:
     """
     Extract features from an IFCB sample file.
     Args:
         sample_path (Path): Path to the IFCB sample file (.adc).
+        save_all_features (bool): Whether to save all computed features from the ifcb-features library.
     Returns:
         List[ROIFeatures]: A list of ROIFeatures dataclasses containing the extracted features.
     """
@@ -258,13 +317,21 @@ def sample_ifcb_features(sample_path: Path) -> List[ROIFeatures]:
         roi_features.append(calculate_roi_features(roi_id=roi_id,
                                                    sample_type='ifcb',
                                                    roi_array=roi_array,
-                                                   volume_ml=volume_ml))
+                                                   volume_ml=volume_ml,
+                                                   save_all_features=save_all_features))
     return roi_features
 
 def sample_image_features(sample_path: Path,
-                          device: Literal['ifcb', 'cytosense']) -> List[ROIFeatures]:
+                          device: Literal['ifcb', 'cytosense'],
+                          save_all_features: bool = False) -> List[ROIFeatures]:
     """
     calculate features for an image sample.
+    Args:
+        sample_path (Path): Path to the image file.
+        device (Literal['ifcb', 'cytosense']): The imaging device where the image originated from. Used to set correct micron factor.
+        save_all_features (bool): Whether to save all computed features from the ifcb-features library.
+    Returns:
+        ROIFeatures: A dataclass containing the calculated features for the image.
     """
     roi_array = np.array(Image.open(sample_path).convert("L"))  # Convert to grayscale
     roi_id = sample_path.name
@@ -275,7 +342,8 @@ def sample_image_features(sample_path: Path,
         roi_id=roi_id,
         sample_type='img',
         roi_array=roi_array,
-        micron_factor=micron_factor
+        micron_factor=micron_factor,
+        save_all_features=save_all_features
     )
     return roi_features
 
@@ -283,7 +351,8 @@ def calculate_roi_features(roi_id: str,
                            sample_type: Literal['ifcb', 'img'],
                            roi_array: np.array,
                            volume_ml: Optional[float] = None,
-                           micron_factor: Optional[float] = 2.8) -> ROIFeatures:
+                           micron_factor: Optional[float] = 2.8,
+                           save_all_features: bool = False) -> ROIFeatures:
     """
     Calculate features for a single ROI array.
     Args:
@@ -298,7 +367,6 @@ def calculate_roi_features(roi_id: str,
     _, all_roi_features = compute_features(roi_array)
     all_roi_features = dict(all_roi_features)
 
-    breakpoint()
     biovol_px = all_roi_features["Biovolume"]
     area = all_roi_features["Area"]
     major_axis_length = all_roi_features["MajorAxisLength"]
@@ -310,6 +378,15 @@ def calculate_roi_features(roi_id: str,
     else:
         biovol_um3 = pixels_to_um3(biovol_px, micron_factor=micron_factor)
         biomass_ugl = None
+    
+    # Save extended features if requested
+    if save_all_features:
+        extended_features = {
+            feature_name: all_roi_features.get(feature_name, None)
+            for feature_name in EXTENDED_FEATURES
+        }
+    else:
+        extended_features = None
 
     return ROIFeatures(
         roi_id=roi_id,
@@ -320,7 +397,8 @@ def calculate_roi_features(roi_id: str,
         area=area,
         major_axis_length=major_axis_length,
         minor_axis_length=minor_axis_length,
-        volume_ml=volume_ml
+        volume_ml=volume_ml,
+        extended_features=extended_features
     )
 
 
@@ -390,10 +468,12 @@ def write_features_to_csv(
         writer.writeheader()
 
         for roi in features:
-            row = {
-                csv_header: getattr(roi, attr_name)
-                for attr_name, csv_header in field_mapping.items()
-            }
+            row = {}
+            for attr_name, csv_header in field_mapping.items():
+                if attr_name in EXTENDED_FEATURES and roi.extended_features is not None:
+                    row[csv_header] = roi.extended_features.get(attr_name, None)
+                else:
+                    row[csv_header] = getattr(roi, attr_name)
             writer.writerow(row)
 
 def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
@@ -423,10 +503,17 @@ def ifcb_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
         "volume_ml": volume_ml
     }
 
+    if roi_features[0].extended_features is not None:
+        field_mapping = {**IFCB_FIELD_MAPPING}
+        for feature_name in EXTENDED_FEATURES:
+            field_mapping[feature_name] = feature_name
+    else:
+        field_mapping = IFCB_FIELD_MAPPING
+
     write_features_to_csv(
         features=roi_features,
         csv_path=csv_path,
-        field_mapping=IFCB_FIELD_MAPPING,
+        field_mapping=field_mapping,
         metadata=metadata
     )
 
@@ -451,9 +538,16 @@ def image_features_to_csv(roi_features: List[ROIFeatures], csv_path: Path):
         "volume_ml": "None"
     }
 
+    if roi_features[0].extended_features is not None:
+        field_mapping = {**IMAGE_FIELD_MAPPING}
+        for feature_name in EXTENDED_FEATURES:
+            field_mapping[feature_name] = feature_name
+    else:
+        field_mapping = IMAGE_FIELD_MAPPING
+
     write_features_to_csv(
         features=roi_features,
         csv_path=csv_path,
-        field_mapping=IMAGE_FIELD_MAPPING,
+        field_mapping=field_mapping,
         metadata=metadata
     )
