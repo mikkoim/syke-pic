@@ -1,11 +1,13 @@
 [project]
 name = "syke-pic"
-version = "0.3.0"
+version = "0.6.0"
 description = "Plankton image classification with neural networks"
 readme = "README.md"
 requires-python = ">=3.9, <3.10"
 authors = [
-    { name = "Otso Velhonoja", email = "otso.velhonoja@syke.fi" }
+    { name = "Otso Velhonoja"},
+    { name = "Kaisa Kraft", email = "kaisa.kraft@syke.fi" },
+    { name = "Mikko Impiö", email = "mikko.impio@syke.fi" },
 ]
 license = { text = "MIT" }
 dependencies = [
