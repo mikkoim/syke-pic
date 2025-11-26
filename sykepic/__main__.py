@@ -112,6 +112,11 @@ def main():
         metavar="SAMPLE PATH",
         help="One or more sample paths (raw file without suffix)",
     )
+    feat_raw.add_argument(
+        "--image-dir",
+        metavar="DIR",
+        help="Root directory of images"
+    )
     feat_parser.add_argument(
         "-o", "--out", metavar="DIR", required=True, help="Root output directory"
     )
@@ -129,6 +134,17 @@ def main():
         "--force",
         action="store_true",
         help="Force overwrite of previous features (Python only)",
+    )
+    feat_parser.add_argument(
+        "--device",
+        metavar="DEVICE",
+        choices=["ifcb", "cytosense"],
+        help="The imaging device ('ifcb' or 'cytosense') where the images originated from. Used to set correct micron factor.",
+    )
+    feat_parser.add_argument(
+        "--save-all-features",
+        action="store_true",
+        help="Save all computed features from the ifcb-features library, not just the standard set.",
     )
 
     # Parser for `sykepic class`
