@@ -14,7 +14,7 @@ from ifcb_features import compute_features
 from sykepic.utils import files, ifcb, logger
 from PIL import Image
 
-VERSION = "py-v4"
+VERSION = "py-v4.1"
 FILE_SUFFIX = ".feat"
 log = logger.get_logger("feat")
 
